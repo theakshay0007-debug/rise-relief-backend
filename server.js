@@ -169,6 +169,32 @@ app.get('/api/admin/fundraiser', requireAdmin, async (req, res) => {
   res.json(result.rows);
 });
 
+// ---- One-time admin setup (for hosts without shell access, e.g. Render free tier) ----
+// Protected by SETUP_SECRET (set it in your host's environment variables) and only
+// works while the admin_users table is empty — it auto-disables itself after first use.
+// Delete the SETUP_SECRET environment variable once you've used this, to close it off.
+app.get('/api/setup-admin', async (req, res) => {
+  try {
+    const SETUP_SECRET = process.env.SETUP_SECRET;
+    if (!SETUP_SECRET) return res.status(403).json({ error: 'Setup is disabled (no SETUP_SECRET configured).' });
+    const { key, loginId, password } = req.query;
+    if (!key || key !== SETUP_SECRET) return res.status(403).json({ error: 'Invalid or missing setup key.' });
+    if (!loginId || !password) return res.status(400).json({ error: 'Provide loginId and password as query parameters.' });
+
+    const existing = await pool.query('SELECT COUNT(*) FROM admin_users');
+    if (parseInt(existing.rows[0].count, 10) > 0) {
+      return res.status(403).json({ error: 'An admin account already exists — setup is disabled. Remove SETUP_SECRET from your environment.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    await pool.query('INSERT INTO admin_users (login_id, password_hash) VALUES ($1,$2)', [loginId, passwordHash]);
+    res.json({ message: 'Admin account created for "' + loginId + '". Now remove the SETUP_SECRET environment variable in Render for safety.' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Something went wrong.' });
+  }
+});
+
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
